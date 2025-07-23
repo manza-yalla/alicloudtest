@@ -1,3 +1,0 @@
-org.springframework.boot.autoconfigure.EnableAutoConfiguration=\
-com.alibaba.cloud.scheduling.schedulerx.SchedulerxAutoConfigure,\
-com.alibaba.cloud.scheduling.shedlock.ShedLockAutoConfigure
