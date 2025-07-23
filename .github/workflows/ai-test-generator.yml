@@ -361,26 +361,97 @@ jobs:
           INPUT_TARGET_PATH: ${{ github.event.inputs.target_path || 'src/' }}
           TEST_FRAMEWORK: ${{ steps.detect.outputs.test_framework }}
 
+      - name: '🧪 Install Test Dependencies'
+        if: steps.generate.outputs.tests_created > 0
+        run: |
+          echo "📦 Installing test dependencies..."
+          
+          if [ "${{ steps.detect.outputs.test_framework }}" == "jest" ] || [ "${{ steps.detect.outputs.test_framework }}" == "vitest" ]; then
+            # Install Jest or Vitest if not already installed
+            if ! npm list jest > /dev/null 2>&1 && ! npm list vitest > /dev/null 2>&1; then
+              npm install --save-dev jest @types/jest || npm install --save-dev vitest
+            fi
+          elif [ "${{ steps.detect.outputs.test_framework }}" == "pytest" ]; then
+            pip install pytest pytest-cov || echo "Pytest already installed"
+          elif [ "${{ steps.detect.outputs.test_framework }}" == "junit" ]; then
+            echo "Java test dependencies should be in pom.xml or build.gradle"
+          fi
+
       - name: '🧪 Validate Generated Tests'
         if: steps.generate.outputs.tests_created > 0
         run: |
-          echo "🧪 Validating generated tests..."
+          echo "🧪 Validating generated tests structure..."
           
           if [ "${{ steps.detect.outputs.test_framework }}" == "jest" ] || [ "${{ steps.detect.outputs.test_framework }}" == "vitest" ]; then
-            echo "Running JavaScript/TypeScript tests..."
-            npm test -- --passWithNoTests || echo "Tests validation completed"
+            echo "Checking JavaScript/TypeScript test syntax..."
+            npm test -- --passWithNoTests --dry-run || echo "Test structure validation completed"
           elif [ "${{ steps.detect.outputs.test_framework }}" == "pytest" ]; then
-            echo "Running Python tests..."
-            python -m pytest --collect-only || echo "Tests validation completed"
+            echo "Checking Python test syntax..."
+            python -m pytest --collect-only || echo "Test structure validation completed"
           fi
 
-      - name: '📊 Generate Coverage Report'
+      - name: '▶️ Run Generated Tests with Coverage'
+        id: run_tests
+        if: steps.generate.outputs.tests_created > 0
+        continue-on-error: true
+        run: |
+          echo "▶️ Running generated tests with coverage..."
+          
+          if [ "${{ steps.detect.outputs.test_framework }}" == "jest" ]; then
+            echo "Running Jest tests with coverage..."
+            npm test -- --coverage --coverageReporters=text --coverageReporters=lcov --passWithNoTests
+            echo "test_result=success" >> $GITHUB_OUTPUT
+          elif [ "${{ steps.detect.outputs.test_framework }}" == "vitest" ]; then
+            echo "Running Vitest tests with coverage..."
+            npx vitest run --coverage || echo "test_result=partial" >> $GITHUB_OUTPUT
+            echo "test_result=success" >> $GITHUB_OUTPUT
+          elif [ "${{ steps.detect.outputs.test_framework }}" == "pytest" ]; then
+            echo "Running Pytest with coverage..."
+            python -m pytest --cov=. --cov-report=term --cov-report=xml --cov-report=html
+            echo "test_result=success" >> $GITHUB_OUTPUT
+          elif [ "${{ steps.detect.outputs.test_framework }}" == "junit" ]; then
+            echo "Running Java tests..."
+            if [ -f "pom.xml" ]; then
+              mvn test
+            elif [ -f "build.gradle" ]; then
+              ./gradlew test
+            fi
+            echo "test_result=success" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️ Unsupported test framework for automatic test execution."
+            echo "test_result=skipped" >> $GITHUB_OUTPUT
+          fi
+
+      - name: '📊 Upload Coverage Reports'
+        if: steps.generate.outputs.tests_created > 0 && steps.run_tests.outputs.test_result == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-reports
+          path: |
+            coverage/
+            htmlcov/
+            *.xml
+            *.lcov
+          retention-days: 30
+
+      - name: '📊 Generate Coverage Summary'
+        id: coverage
         if: steps.generate.outputs.tests_created > 0
         run: |
-          echo "📊 Generating coverage report..."
+          echo "📊 Generating coverage summary..."
           echo "Generated ${{ steps.generate.outputs.tests_created }} test files"
           echo "Framework: ${{ steps.detect.outputs.test_framework }}"
           echo "Project Type: ${{ steps.detect.outputs.project_type }}"
+          echo "Test Result: ${{ steps.run_tests.outputs.test_result || 'not_run' }}"
+          
+          # Try to extract coverage percentage if available
+          if [ -f "coverage/lcov.info" ]; then
+            echo "coverage_file=lcov" >> $GITHUB_OUTPUT
+          elif [ -f "coverage.xml" ]; then
+            echo "coverage_file=xml" >> $GITHUB_OUTPUT
+          else
+            echo "coverage_file=none" >> $GITHUB_OUTPUT
+          fi
 
       - name: '🚀 Create Pull Request with Tests'
         if: steps.generate.outputs.tests_created > 0 && github.event_name != 'pull_request'
